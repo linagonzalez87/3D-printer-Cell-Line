@@ -1,3 +1,4 @@
+//Code to prime the tube lines with agarose and cells 
 
 int TimeToDelay1= 1000;
 int TimeToDelay2 = 5000;
