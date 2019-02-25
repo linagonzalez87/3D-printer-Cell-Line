@@ -1,0 +1,54 @@
+#define NOT_AN_INTERRUPT -1 
+
+int PIN_1 = 2; 
+int PIN_2 = 3;
+int SOLE1 = 4;
+int counter1 =0;
+int counter2 =0; 
+
+const int LED1 = 11; 
+const int LED2 = 14;
+
+volatile int state1 = LOW;  
+volatile int state2 = LOW; 
+
+void setup() { 
+//set-up for serial  
+Serial.begin(9600);
+
+//photo interrupter 
+pinMode(PIN_1, INPUT);
+pinMode(PIN_2, INPUT);
+
+attachInterrupt(digitalPinToInterrupt(PIN_1), encoderIntA, CHANGE);
+attachInterrupt(digitalPinToInterrupt(PIN_2), encoderIntB, CHANGE);
+
+//LED set-up
+
+pinMode(LED1, OUTPUT);
+pinMode(LED2, OUTPUT);
+pinMode(SOLE1, OUTPUT);
+
+}
+
+void loop() {
+  
+  state1 = digitalRead(PIN_1);
+  state2 = digitalRead(PIN_2);
+  
+ }
+
+
+void encoderIntA(){ 
+digitalWrite(LED1, HIGH);
+delay(500);
+digitalWrite(LED1, LOW);
+}
+
+void encoderIntB(){ 
+digitalWrite(LED2, HIGH);
+delay(500);
+digitalWrite(LED2, LOW);
+}
+
+
