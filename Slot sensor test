@@ -1,3 +1,5 @@
+//Code to test slot sensor connections 
+
 #define NOT_AN_INTERRUPT -1 
 
 int PIN_1 = 2; 
