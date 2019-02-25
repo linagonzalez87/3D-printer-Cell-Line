@@ -1,0 +1,432 @@
+Arduino code to control optical sensors, agarose pumps and cell pumps
+(only one printhead) 
+
+//this code works with a single nozzle; only one type of cell. 
+//this code primes the agarose lines and adds cells initially 
+//then it continuously adds agarose and cells. In addition, this code runs the tandem slot 
+//sensors and detects when the motor reverses direction to close the agarose pump controlling 
+//the agarose leaving the nozzle
+
+#define NOT_AN_INTERRUPT -1 //takes care of an error :) using an old version of arduino in an old PC :(
+//you don't need this line if using an recent IDE.
+
+//for adding agarose and cells initially
+
+//i is used to avg the samples in temperature
+int j = 1; //initial addition of cells 
+int k = 1; // priming to continuous filling
+volatile int z = 0; //cell input 
+volatile int r = 0; //cell input
+volatile int s = 0; //stepper movement detection
+
+volatile int encoderPos = 0;
+volatile int tempPos = 0;
+volatile  float steinhart;
+unsigned long slot_time = 0;
+unsigned long last_slot_time = 0;
+
+
+//LEDs indicators
+const int LED1 = 9;  //this LED indicates when solenoid valve #1 is on
+const int LED2 = 10; //this led indicates when mixing chamber is filling up 
+const int LED3 = 26; //this led indicates when mixing chamber is not filling up
+const int LED4 = 16; //this led indicates when the cell liquid pump is on 
+const int LED5 = 11; //this led indicates when tandem slot sensors #1 (LEFT motor) is on 
+const int LED6 = 14; //this led indicates when tandem slot sensors #1 (LEFT motor) is on 
+
+//slot sensors for detecting reversal of motor
+const int pin1 = 2; //motor reversal control (LEFT motor) 
+const int pin2 = 3; //motor reversal control (LEFT motor)
+const int pin3 = 20; //cell input (LEFT motor)
+
+//solenoid valves 
+const int SOLE1 = 5; //agarose control solenoid #1; controls atmospheric pressure 
+// for dispensing cell-agarose mixture 
+
+//pump and solenoids for cell input
+const int PUMP1 = 12; //cell liquid pump #1 
+const int SOLE4 = 15; //solenoid valve controlling cell liquid pump #1 
+
+long previousMillis = 0;
+long interval_1 = 1000; 
+long interval_2 = 100; 
+
+int RV = 4;  
+int inputPin = A1; 
+int readingP = 0; 
+int RVP_min = 0;
+int RVP_max = 255;
+int RVP = 100; 
+int TEMP1 = 63;
+int TEMP2 = 55;
+
+#define THERMISTORPIN0 A0 //thermistor #3 temperature at the top of mixing chamber
+#define THERMISTORNOMINAL 10000 
+#define TEMPERATURENOMINAL 25 
+#define NUMSAMPLES 5
+#define BCOEFFICIENT 3950 
+#define SERIESRESISTOR 10000 
+
+int samples[NUMSAMPLES]; 
+
+void setup() { 
+
+  //set-up for serial  
+  Serial.begin(9600);
+
+  //set-up interrupts
+  pinMode(pin1, INPUT);
+  pinMode(pin2, INPUT);
+  pinMode(pin3, INPUT);
+
+  attachInterrupt(digitalPinToInterrupt(pin1), SLOTSENSOR2, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(pin2), SLOTSENSOR3, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(pin3), SLOTSENSORCELLS_LEFT, RISING);
+
+  //set-up LED, pump and valves
+  pinMode(LED1, OUTPUT);
+  pinMode(LED2, OUTPUT);
+  pinMode(LED4, OUTPUT);
+  pinMode(LED5, OUTPUT);
+  pinMode(LED6, OUTPUT);
+  pinMode(PUMP1, OUTPUT);
+  pinMode(SOLE1,  OUTPUT);
+  pinMode(SOLE4, OUTPUT);
+  pinMode(RV, OUTPUT); //relief valve
+  analogReference(EXTERNAL); //temperature sensor
+}
+
+void loop() {
+
+  digitalWrite(SOLE1, LOW); //needs to be closed except for when priming and when motor is moving clockwise
+  analogWrite(RV, RVP_min); //needs to be closed except for when priming and when motor is moving clockwise
+  
+  uint8_t i; 
+  float average;
+
+  // take N samples in a row, with a slight delay 
+  for (i=0; i< NUMSAMPLES; i++) { 
+    samples[i] = analogRead(THERMISTORPIN0); 
+    delay(10); 
+  } 
+
+  // average all the samples out
+  average = 0; 
+  for (i=0; i< NUMSAMPLES; i++) { 
+    average += samples[i]; 
+  } 
+
+  average /= NUMSAMPLES; 
+
+  // convert the value to resistance (ambient)
+  average = 1023 / average - 1; 
+  average = SERIESRESISTOR / average; 
+
+  steinhart = average / THERMISTORNOMINAL; // (R/Ro) 
+  steinhart = log(steinhart); // ln(R/Ro) 
+  steinhart /= BCOEFFICIENT; // 1/B * ln(R/Ro) 
+  steinhart += 1.0 / (TEMPERATURENOMINAL + 273.15); // + (1/To) 
+  steinhart = 1.0 / steinhart; // Invert 
+  steinhart -= 273.15; // convert to C 
+
+  Serial.print("outside"); 
+  Serial.print('\n');
+  Serial.print("TEMP");
+  Serial.print("\t");
+  Serial.print(TEMP1);
+  Serial.print("\t");
+  Serial.print(TEMP2);
+  Serial.print("\t");
+  Serial.print("Actual temp");
+  Serial.print("\t");
+  Serial.print(steinhart);
+  Serial.print('\n');
+  //  Serial.print("j");
+  //  Serial.print("\t");
+  //  Serial.print(j);
+  Serial.print('\n');
+  Serial.print("k");
+  Serial.print("\t");
+  Serial.print(k);
+  Serial.print('\n');
+  Serial.print("\t");
+  Serial.print("r");
+  Serial.print("\t");
+  Serial.print(r);
+  Serial.print('\n');
+  Serial.print("\t");
+  Serial.print("s");
+  Serial.print('\t');
+  Serial.print(s);
+  Serial.print('\n');
+  delay(1000); 
+
+
+  //make sure the relief valve is closed to prime the lines and chamber (do this once) at ~4psi
+
+  if (k == 1) {
+
+    while(steinhart < TEMP1){
+      
+      digitalWrite(SOLE1, HIGH);
+      analogWrite(RV, RVP_max); //priming line and filling tank
+      digitalWrite(LED1, HIGH);
+      delay(100);
+      digitalWrite(LED1, LOW);
+
+      // take N samples in a row, with a slight delay 
+      for (i=0; i< NUMSAMPLES; i++) { 
+        samples[i] = analogRead(THERMISTORPIN0); 
+        delay(10); 
+      } 
+
+      // average all the samples out
+      average = 0; 
+      for (i=0; i< NUMSAMPLES; i++) { 
+        average += samples[i]; 
+      } 
+
+      average /= NUMSAMPLES; 
+
+      // convert the value to resistance (ambient)
+      average = 1023 / average - 1; 
+      average = SERIESRESISTOR / average; 
+
+      steinhart = average / THERMISTORNOMINAL; // (R/Ro) 
+      steinhart = log(steinhart); // ln(R/Ro) 
+      steinhart /= BCOEFFICIENT; // 1/B * ln(R/Ro) 
+      steinhart += 1.0 / (TEMPERATURENOMINAL + 273.15); // + (1/To) 
+      steinhart = 1.0 / steinhart; // Invert 
+      steinhart -= 273.15; // convert to C 
+
+      //For debugging: 
+      Serial.print("inside"); 
+      Serial.print('\n');
+      Serial.print("TEMP");
+      Serial.print("\t");
+      Serial.print(TEMP1);
+      Serial.print("\t");
+      Serial.print(TEMP2);
+      Serial.print("\t");
+      Serial.print("Actual temp");
+      Serial.print("\t");
+      Serial.print(steinhart);
+      Serial.print('\n');
+      //      Serial.print("j");
+      Serial.print("\t");
+      //      Serial.print(j);
+      //      Serial.print('\n');
+      Serial.print("k");
+      Serial.print("\t");
+      Serial.print(k);
+      Serial.print('\n');
+      Serial.print("\t");
+      Serial.print("r");
+      Serial.print("\t");
+      Serial.print(r);
+      Serial.print('\n');
+      Serial.print("\t");
+      Serial.print("z");
+      Serial.print('\t');
+      Serial.print(z);
+      Serial.print('\n');
+      Serial.print("\t");
+      Serial.print("s");
+      Serial.print("\t");
+      Serial.print('\n');
+      Serial.print(s);
+      delay(1000); 
+    }
+
+    //intitial addition of the agarose and cells; use the thermistor to detect when the chamber is fulled 
+    //with some head space, based on the temperature relieve the electronic relief valve when the mixing 
+    //chamber is full and add cells to keep agarose greater than 4%.
+
+    //input cells at the beginning to initially dilute agarose; only once
+    if (j==1){
+      digitalWrite(SOLE4, HIGH);
+      digitalWrite(PUMP1, HIGH);
+      digitalWrite(LED4, HIGH);
+      delay(90);// just using delay once at the beginning (using just millis after here)
+      digitalWrite(SOLE4, LOW);
+      digitalWrite(PUMP1, LOW);
+      digitalWrite(LED4, LOW);
+      j=0; // so that it doesn't go to this inner loop again
+    }
+
+    k=0; 
+    analogWrite(RV, RVP_min); //relief valve 
+    digitalWrite(SOLE1, LOW); //close valve 
+
+    delay(3000); 
+  }
+
+  //k=0;
+  //switch from initial priming to continous input of agarose and cells; use millis() here instead of delay() 
+
+  if (k==0){  //switching from 1 (priming) to 0 (continous-INTERMITENT)
+
+    if (r>=1){ //wait two revolution to input cells 
+      digitalWrite(SOLE4, HIGH);
+      digitalWrite(PUMP1, HIGH);
+      digitalWrite(LED4, HIGH);
+      delay(15); //microdelay ???
+      digitalWrite(SOLE4, LOW);
+      digitalWrite(PUMP1, LOW);
+      digitalWrite(LED4, LOW);
+      r=0;
+    }
+
+
+//    if (steinhart > TEMP2) {
+//      analogWrite(RV, RVP_min);// relief valve should be closed 
+//      Serial.print("too high");
+//      Serial.print('\n');
+//      digitalWrite(LED2, HIGH);
+//      delay(100);
+//      digitalWrite(LED2, LOW);
+//
+//    }
+
+    if (steinhart > TEMP2) {
+         analogWrite(RV, RVP_min); //relief valve 
+         digitalWrite(SOLE1, LOW); //close valve 
+            }
+            
+    if (steinhart < TEMP2) {    
+    if (s>=3){
+        //automatically adjust relief valve 
+         digitalWrite(SOLE1, HIGH);
+         readingP = analogRead(inputPin); 
+         Serial.print("reading pressure:");
+         Serial.print("\t");
+         Serial.println(readingP);
+         Serial.println('\n');
+
+         if (readingP > 175){
+         RVP = RVP-5;    
+          }
+         if (readingP < 150){
+         RVP =  RVP +5;
+        }
+
+        analogWrite(RV, RVP); 
+        delay(500);
+        analogWrite(RV, RVP_min); 
+
+        Serial.print("in between");
+        Serial.print('\n');
+        Serial.print(RVP);
+        Serial.print('\n');
+        digitalWrite(LED3, HIGH);
+        delay(100);
+        digitalWrite(LED3, LOW);
+        s=0; 
+    }
+   }
+  }
+ }
+
+//square wave form sensor signals is 90 deg out-of-phase
+
+void SLOTSENSOR2(){ 
+  s++;
+  tempPos = encoderPos; 
+  digitalWrite(LED5, HIGH);
+  delayMicroseconds(10000);
+  digitalWrite(LED5, LOW);
+
+  //low-to-high on channel A
+  if (digitalRead(pin1)== HIGH){
+
+    //check channel B
+    if (digitalRead(pin2)==LOW){    //CW
+      encoderPos = encoderPos +1; 
+    }
+
+    else {
+      encoderPos = encoderPos -1; //CCW
+    }
+  }
+
+  else { //high-to-low on channel A
+    if (digitalRead(pin2)==HIGH){
+      encoderPos = encoderPos +1; //CW
+    }
+    else {
+      encoderPos = encoderPos -1; //CCW
+    }
+  }
+
+  if(encoderPos > tempPos ){  //turn on because it's going CW
+     digitalWrite(SOLE1, LOW);
+     digitalWrite(LED1, LOW);
+  }
+
+  else{
+     digitalWrite(SOLE1, HIGH);
+     digitalWrite(LED1, HIGH);
+  }
+}
+
+//adding a second sensor for accuracy
+void SLOTSENSOR3(){ 
+
+  tempPos = encoderPos;
+  digitalWrite(LED6, HIGH);
+  delayMicroseconds(10000);
+  digitalWrite(LED6,LOW);
+
+  //low-to-high on channel B
+  if (digitalRead(pin2)== HIGH){ 
+
+    //check channel A 
+    if (digitalRead(pin1)==HIGH){
+      encoderPos = encoderPos +1; //CW
+
+    }
+    else {
+      encoderPos = encoderPos -1; //CCW
+    }
+  }
+
+  else { //high-to-low on channel B 
+    if (digitalRead(pin1)==LOW){
+      encoderPos = encoderPos +1; //CW
+    }
+    else {
+      encoderPos = encoderPos -1; //CCW
+    }
+  }
+
+    if(encoderPos > tempPos ){  //turn off because it's going CW
+      digitalWrite(SOLE1, LOW);
+      digitalWrite(LED1, LOW);
+  }
+
+  else{
+      digitalWrite(SOLE1, HIGH);
+      digitalWrite(LED1, HIGH);
+  }
+  
+}
+
+
+
+
+void SLOTSENSORCELLS_LEFT(){
+  slot_time = millis();
+  //check to see if the optical sensor was 
+  //called in the last second (debauncing)
+
+  if (slot_time - last_slot_time > 2000){
+    r++;
+    //    if (steinhart < TEMP1 ){
+    //      z++;
+    //    }
+    //    if (steinhart > TEMP1 && steinhart < TEMP2){
+    //      r++;
+    //    }
+    //    last_slot_time = slot_time; 
+  }
+}
