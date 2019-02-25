@@ -1,0 +1,38 @@
+
+int TimeToDelay1= 1000;
+int TimeToDelay2 = 5000;
+
+int PUMP1 = 12;
+int PUMP2 = 8;
+int PUMP3 = 4;
+int PUMP4 = 2;
+int SOLE4 = 15; 
+int SOLE6 = 3; 
+int SOLE5 = 27;
+int SOLE3 = 5; 
+
+void setup(){
+  pinMode(PUMP1, OUTPUT);
+  pinMode(PUMP2, OUTPUT);
+  pinMode(PUMP3, OUTPUT);
+  pinMode(PUMP4, OUTPUT);
+  pinMode(SOLE4, OUTPUT);
+  pinMode(SOLE6, OUTPUT);
+  pinMode(SOLE5, OUTPUT);
+  pinMode(SOLE3, OUTPUT);
+}
+
+void loop(){ 
+  
+     digitalWrite(SOLE4, HIGH);
+     digitalWrite(PUMP1, HIGH);
+     digitalWrite(SOLE3, HIGH);
+     digitalWrite(SOLE6, HIGH);
+     digitalWrite(PUMP4, HIGH);
+     
+//     delay(TimeToDelay1);  
+//     digitalWrite(SOLE4, LOW);
+//     digitalWrite(PUMP1, LOW);
+//     digitalWrite(SOLE3, LOW);
+//     delay(TimeToDelay2);   
+}
